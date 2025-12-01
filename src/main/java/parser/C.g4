@@ -1,7 +1,11 @@
 grammar C;
 
 // Regra inicial: um programa é uma lista de includes, funções ou declarações globais
-prog: (include | function | declaration)* ;
+prog: (include | function | structDecl | declaration)* ;
+
+structDecl
+    : 'struct' ID '{' (type ID ';')* '}' ';'
+    ;
 
 include: '#include' '<' ID '.h' '>' ;
 
@@ -22,7 +26,9 @@ block: '{' statement* '}' ;
 
 statement
     : declaration ';'                       # DeclStmt
+    | structDecl                            # StructDefStmt
     | ID ('[' expr ']')? '=' expr ';'       # AssignStmt
+    | expr '.' ID '=' expr ';'              # StructAssignStmt
     | expr ';'                              # ExprStmt
     | 'if' '(' expr ')' statement ('else' statement)? # IfStmt
     | 'while' '(' expr ')' statement        # WhileStmt
@@ -34,11 +40,12 @@ statement
 declaration:
  type ID ('[' INT ']' | '=' expr)? ;
 
-type: 'int' | 'float' | 'char' | 'void' ;
+type: 'int' | 'float' | 'char' | 'void' | 'struct' ID ;
 
 // Expressões básicas
 expr
-    : ID '[' expr ']'             # ArrayExpr
+    : expr '.' ID             # MemberAccessExpr
+    | ID '[' expr ']'             # ArrayExpr
     | ID '(' (expr (',' expr)*)? ')' # CallExpr
     | op=('&'|'-'|'!') expr       # UnaryExpr
     | expr op=('*'|'/') expr      # MulDiv

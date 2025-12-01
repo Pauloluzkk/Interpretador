@@ -7,6 +7,7 @@ public class TabelaSimbolos {
     // Armazena nome -> Variável (valor + tipo)
     private Map<String, Variavel> memoria = new HashMap<>();
     private Map<String, Funcao> funcoes = new HashMap<>();
+    private Map<String, StructDefinition> structs = new HashMap<>();
     // Suporte a escopos (para funções futuramente)
     private TabelaSimbolos escopoPai;
 
@@ -60,6 +61,17 @@ public class TabelaSimbolos {
             throw new RuntimeException("Erro: Variável '" + nome + "' não declarada.");
         }
     }
+    public void definirStruct(String nome, StructDefinition def) {
+        structs.put(nome, def);
+    }
+
+    public StructDefinition buscarStruct(String nome) {
+        StructDefinition s = structs.get(nome);
+        if (s == null && escopoPai != null) {
+            return escopoPai.buscarStruct(nome);
+        }
+        return s;
+    }
 }
 
 // Classe auxiliar para guardar Tipo e Valor juntos
@@ -81,5 +93,15 @@ class Funcao {
         this.nome = nome;
         this.ctx = ctx;
         this.parametros = params;
+    }
+}
+
+class StructDefinition {
+    String nome;
+    // Mapa de NomeDoCampo -> Tipo (ex: "x" -> "int")
+    Map<String, String> campos = new HashMap<>();
+
+    public StructDefinition(String nome) {
+        this.nome = nome;
     }
 }

@@ -1,19 +1,20 @@
 #include <stdio.h>
 
+struct Pessoa {
+    int idade;
+    int id;
+};
+
 int main(void) {
-    int numeros[5];
-    int i = 0;
+    struct Pessoa p;
 
-    // Preenchendo o array
-    while (i < 5) {
-        numeros[i] = i * 10;
-        i = i + 1;
-    }
+    printf("Configurando pessoa...\n");
+    p.idade = 25;
+    p.id = 1;
 
-    // Lendo do array
-    printf("O valor na posicao 3 eh: %d", numeros[3]); // Deve ser 30
+    printf("Dados da Pessoa: ID=%d, Idade=%d\n", p.id, p.idade);
 
-    // Teste de alteração
-    numeros[3] = 999;
-    printf("\nNovo valor na posicao 3 eh: %d", numeros[3]); // Deve ser 999
+    // Teste de modificação
+    p.idade = p.idade + 1;
+    printf("Ano que vem ela tera: %d anos", p.idade);
 }

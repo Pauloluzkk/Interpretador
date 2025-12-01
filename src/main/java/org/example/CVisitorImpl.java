@@ -3,6 +3,8 @@ package org.example;
 import parser.CBaseVisitor;
 import parser.CParser;
 import java.util.Scanner;
+import java.util.Map;
+import java.util.HashMap;
 
 public class CVisitorImpl extends CBaseVisitor<Object> {
 
@@ -17,16 +19,31 @@ public class CVisitorImpl extends CBaseVisitor<Object> {
         String tipo = ctx.declaration().type().getText();
         Object valor = null;
 
-        // Caso 1: Vetor -> int arr[5];
-        if (ctx.declaration().INT() != null) {
-            int tamanho = Integer.parseInt(ctx.declaration().INT().getText());
-            // Inicializa um array de objetos com o tamanho pedido
-            valor = new Object[tamanho];
+        // CASO 1: Declaração de STRUCT (ex: struct Ponto p;)
+        if (tipo.startsWith("struct")) {
+            // O parser retorna "struct Ponto" ou "structPonto" (depende dos espaços)
+            // Vamos extrair apenas o nome da struct (o segundo token)
+            String nomeStruct = ctx.declaration().type().ID().getText();
 
-            // Zera o array (opcional, mas C costuma ter lixo de memória, Java zera com null)
-            for(int i=0; i<tamanho; i++) ((Object[])valor)[i] = 0; // Assume int
+            StructDefinition def = escopoAtual.buscarStruct(nomeStruct);
+            if (def == null) {
+                throw new RuntimeException("Erro: Struct '" + nomeStruct + "' não foi definida.");
+            }
+
+            // Instancia a struct como um Map (NomeCampo -> Valor)
+            Map<String, Object> instancia = new HashMap<>();
+            for (String campo : def.campos.keySet()) {
+                instancia.put(campo, 0); // Inicializa tudo com 0
+            }
+            valor = instancia;
         }
-        // Caso 2: Declaração normal -> int a = 10;
+        // CASO 2: Declaração de ARRAY (ex: int arr[5];)
+        else if (ctx.declaration().INT() != null) {
+            int tamanho = Integer.parseInt(ctx.declaration().INT().getText());
+            valor = new Object[tamanho];
+            for(int i=0; i<tamanho; i++) ((Object[])valor)[i] = 0;
+        }
+        // CASO 3: Declaração COMUM (ex: int a = 10;)
         else if (ctx.declaration().expr() != null) {
             valor = visit(ctx.declaration().expr());
         }
@@ -368,5 +385,78 @@ public class CVisitorImpl extends CBaseVisitor<Object> {
         int idx = (int) indiceObj;
 
         return array[idx];
+    }
+
+    @Override
+    public Object visitStructDecl(CParser.StructDeclContext ctx) {
+        // A lógica é a mesma que você já tinha, mas aplicada direto no contexto Decl
+
+        // Pega o nome (índice 0, pois é o primeiro ID da linha)
+        String nomeStruct = ctx.ID(0).getText();
+
+        StructDefinition def = new StructDefinition(nomeStruct);
+
+        // Itera pelos campos
+        // O índice dos IDs de campo começa em 1
+        int indexIDCampo = 1;
+        for(int i=0; i < ctx.type().size(); i++) {
+            String tipoCampo = ctx.type(i).getText();
+            String nomeCampo = ctx.ID(indexIDCampo).getText();
+
+            def.campos.put(nomeCampo, tipoCampo);
+            indexIDCampo++;
+        }
+
+        escopoAtual.definirStruct(nomeStruct, def);
+        return null;
+    }
+    @Override
+    public Object visitStructDefStmt(CParser.StructDefStmtContext ctx) {
+        return visit(ctx.structDecl());
+    }
+
+    @Override
+    public Object visitStructAssignStmt(CParser.StructAssignStmtContext ctx) {
+        // Regra: expr '.' ID '=' expr ';'
+
+        Object objeto = visit(ctx.expr(0)); // O lado esquerdo (a struct)
+        String nomeCampo = ctx.ID().getText();
+        Object valor = visit(ctx.expr(1));  // O lado direito (o valor)
+
+        if (objeto instanceof Map) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> structInstancia = (Map<String, Object>) objeto;
+
+            if (!structInstancia.containsKey(nomeCampo)) {
+                throw new RuntimeException("Erro: Campo '" + nomeCampo + "' não existe.");
+            }
+
+            structInstancia.put(nomeCampo, valor);
+        } else {
+            throw new RuntimeException("Erro: Atribuição de campo em variável que não é struct.");
+        }
+        return null;
+    }
+
+    @Override
+    public Object visitMemberAccessExpr(CParser.MemberAccessExprContext ctx) {
+        // 1. Visita quem está à esquerda do ponto (o objeto 'p')
+        Object esquerda = visit(ctx.expr());
+
+        // 2. Pega o nome do campo (o 'x')
+        String nomeCampo = ctx.ID().getText();
+
+        // 3. Verifica e acessa
+        if (esquerda instanceof Map) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> structInstancia = (Map<String, Object>) esquerda;
+
+            if (!structInstancia.containsKey(nomeCampo)) {
+                throw new RuntimeException("Erro: Campo '" + nomeCampo + "' nao existe na struct.");
+            }
+            return structInstancia.get(nomeCampo);
+        } else {
+            throw new RuntimeException("Erro: Tentando acessar campo '.' em algo que nao eh struct.");
+        }
     }
 }
