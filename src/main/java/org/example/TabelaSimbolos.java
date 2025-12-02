@@ -4,20 +4,19 @@ import java.util.HashMap;
 import java.util.Map;
 
 public class TabelaSimbolos {
-    // Armazena nome -> Variável (valor + tipo)
     private Map<String, Variavel> memoria = new HashMap<>();
     private Map<String, Funcao> funcoes = new HashMap<>();
     private Map<String, StructDefinition> structs = new HashMap<>();
-    // Suporte a escopos (para funções futuramente)
+    private Map<String, UnionDefinition> unions = new HashMap<>(); // NOVO
+
     private TabelaSimbolos escopoPai;
 
     public TabelaSimbolos(TabelaSimbolos pai) {
         this.escopoPai = pai;
     }
 
-    public void declarar(String nome, String tipo, Object valor) {
-        // Aqui você pode adicionar verificação se já existe (Erro Semântico)
-        memoria.put(nome, new Variavel(tipo, valor));
+    public void declarar(String nome, String tipo, Object valor, boolean ehPonteiro) {
+        memoria.put(nome, new Variavel(tipo, valor, ehPonteiro));
     }
 
     public void declararFuncao(String nome, Funcao func) {
@@ -34,7 +33,6 @@ public class TabelaSimbolos {
 
     public Variavel buscar(String nome) {
         Variavel v = memoria.get(nome);
-        // Se não achou aqui e tem pai, busca no pai (Escopo Global)
         if (v == null && escopoPai != null) {
             return escopoPai.buscar(nome);
         }
@@ -44,15 +42,26 @@ public class TabelaSimbolos {
     public void atribuir(String nome, Object valor) {
         Variavel v = buscar(nome);
         if (v != null) {
-            // Validação de Tipos (Garante os 7 pontos da planilha)
+            // Conversões automáticas
             if (v.tipo.equals("int") && !(valor instanceof Integer)) {
-                // Tenta converter automaticamente (cast) se for float para int
                 if (valor instanceof Float) {
                     valor = ((Float) valor).intValue();
                 } else if (valor instanceof Double) {
                     valor = ((Double) valor).intValue();
-                } else {
-                    throw new RuntimeException("Erro Semântico: Atribuindo valor incompatível a int '" + nome + "'");
+                } else if (valor instanceof Character) {
+                    valor = (int) ((Character) valor);
+                }
+            }
+            else if (v.tipo.equals("float") && !(valor instanceof Float)) {
+                if (valor instanceof Integer) {
+                    valor = ((Integer) valor).floatValue();
+                } else if (valor instanceof Double) {
+                    valor = ((Double) valor).floatValue();
+                }
+            }
+            else if (v.tipo.equals("char") && !(valor instanceof Character)) {
+                if (valor instanceof Integer) {
+                    valor = (char)((Integer) valor).intValue();
                 }
             }
 
@@ -61,6 +70,7 @@ public class TabelaSimbolos {
             throw new RuntimeException("Erro: Variável '" + nome + "' não declarada.");
         }
     }
+
     public void definirStruct(String nome, StructDefinition def) {
         structs.put(nome, def);
     }
@@ -72,22 +82,38 @@ public class TabelaSimbolos {
         }
         return s;
     }
+
+    // NOVO: Union
+    public void definirUnion(String nome, UnionDefinition def) {
+        unions.put(nome, def);
+    }
+
+    public UnionDefinition buscarUnion(String nome) {
+        UnionDefinition u = unions.get(nome);
+        if (u == null && escopoPai != null) {
+            return escopoPai.buscarUnion(nome);
+        }
+        return u;
+    }
 }
 
-// Classe auxiliar para guardar Tipo e Valor juntos
+// Classe auxiliar
 class Variavel {
     String tipo;
     Object valor;
+    boolean ehPonteiro; // NOVO
 
-    public Variavel(String tipo, Object valor) {
+    public Variavel(String tipo, Object valor, boolean ehPonteiro) {
         this.tipo = tipo;
         this.valor = valor;
+        this.ehPonteiro = ehPonteiro;
     }
 }
+
 class Funcao {
     String nome;
-    parser.CParser.FunctionContext ctx; // O código da função (Árvore do ANTLR)
-    java.util.List<String> parametros;  // Nomes dos parâmetros (ex: ["a", "b"])
+    parser.CParser.FunctionContext ctx;
+    java.util.List<String> parametros;
 
     public Funcao(String nome, parser.CParser.FunctionContext ctx, java.util.List<String> params) {
         this.nome = nome;
@@ -98,10 +124,19 @@ class Funcao {
 
 class StructDefinition {
     String nome;
-    // Mapa de NomeDoCampo -> Tipo (ex: "x" -> "int")
     Map<String, String> campos = new HashMap<>();
 
     public StructDefinition(String nome) {
+        this.nome = nome;
+    }
+}
+
+// NOVO
+class UnionDefinition {
+    String nome;
+    Map<String, String> campos = new HashMap<>();
+
+    public UnionDefinition(String nome) {
         this.nome = nome;
     }
 }

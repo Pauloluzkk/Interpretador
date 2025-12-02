@@ -8,160 +8,135 @@ import java.util.HashMap;
 
 public class CVisitorImpl extends CBaseVisitor<Object> {
 
-    // Começa com um escopo global
     private TabelaSimbolos escopoAtual = new TabelaSimbolos(null);
+    private Scanner scanner = new Scanner(System.in); // Reutilizar scanner
+
+    // Flags para controle de fluxo
+    private boolean breakFlag = false;
+    private boolean continueFlag = false;
 
     // --- 1. Declarações e Atribuições ---
 
     @Override
     public Object visitDeclStmt(CParser.DeclStmtContext ctx) {
-        String nome = ctx.declaration().ID().getText();
-        String tipo = ctx.declaration().type().getText();
+        return visit(ctx.declaration());
+    }
+
+    @Override
+    public Object visitDeclaration(CParser.DeclarationContext ctx) {
+        String nome = ctx.ID().getText();
+        String tipo = ctx.type().getText();
+        boolean ehPonteiro = ctx.MULT() != null; // Verifica se tem *
         Object valor = null;
 
-        // CASO 1: Declaração de STRUCT (ex: struct Ponto p;)
+        // CASO 1: STRUCT
         if (tipo.startsWith("struct")) {
-            // O parser retorna "struct Ponto" ou "structPonto" (depende dos espaços)
-            // Vamos extrair apenas o nome da struct (o segundo token)
-            String nomeStruct = ctx.declaration().type().ID().getText();
-
+            String nomeStruct = ctx.type().ID().getText();
             StructDefinition def = escopoAtual.buscarStruct(nomeStruct);
-            if (def == null) {
-                throw new RuntimeException("Erro: Struct '" + nomeStruct + "' não foi definida.");
-            }
+            if (def == null) throw new RuntimeException("Erro: Struct '" + nomeStruct + "' não definida.");
 
-            // Instancia a struct como um Map (NomeCampo -> Valor)
             Map<String, Object> instancia = new HashMap<>();
-            for (String campo : def.campos.keySet()) {
-                instancia.put(campo, 0); // Inicializa tudo com 0
-            }
+            for (String campo : def.campos.keySet()) instancia.put(campo, 0);
             valor = instancia;
         }
-        // CASO 2: Declaração de ARRAY (ex: int arr[5];)
-        else if (ctx.declaration().INT() != null) {
-            int tamanho = Integer.parseInt(ctx.declaration().INT().getText());
+        // CASO 2: UNION
+        else if (tipo.startsWith("union")) {
+            String nomeUnion = ctx.type().ID().getText();
+            UnionDefinition def = escopoAtual.buscarUnion(nomeUnion);
+            if (def == null) throw new RuntimeException("Erro: Union '" + nomeUnion + "' não definida.");
+
+            Map<String, Object> instancia = new HashMap<>();
+            // Union: todos os campos compartilham a mesma memória, inicializa vazio
+            for (String campo : def.campos.keySet()) instancia.put(campo, null);
+            valor = instancia;
+        }
+        // CASO 3: ARRAY
+        else if (ctx.INT() != null) {
+            int tamanho = Integer.parseInt(ctx.INT().getText());
             valor = new Object[tamanho];
             for(int i=0; i<tamanho; i++) ((Object[])valor)[i] = 0;
         }
-        // CASO 3: Declaração COMUM (ex: int a = 10;)
-        else if (ctx.declaration().expr() != null) {
-            valor = visit(ctx.declaration().expr());
+        // CASO 4: PONTEIRO (int *ptr = ...)
+        else if (ehPonteiro) {
+            if (ctx.expr() != null) {
+                valor = visit(ctx.expr()); // Pode ser um endereço (&x)
+            } else {
+                valor = null; // Ponteiro não inicializado
+            }
+        }
+        // CASO 5: INICIALIZAÇÃO NORMAL
+        else if (ctx.expr() != null) {
+            valor = visit(ctx.expr());
+        }
+        // CASO 6: SEM INICIALIZAÇÃO
+        else {
+            // Valores padrão por tipo
+            if (tipo.equals("int")) valor = 0;
+            else if (tipo.equals("float")) valor = 0.0f;
+            else if (tipo.equals("char")) valor = '\0';
+            else valor = null;
         }
 
-        escopoAtual.declarar(nome, tipo, valor);
+        escopoAtual.declarar(nome, tipo, valor, ehPonteiro);
         return null;
     }
 
     @Override
-    public Object visitAssignStmt(CParser.AssignStmtContext ctx) {
-        String nome = ctx.ID().getText();
+    public Object visitAssignExpr(CParser.AssignExprContext ctx) {
+        Object valorDireita = visit(ctx.expr(1));
+        CParser.ExprContext ladoEsquerdo = ctx.expr(0);
 
-        // Verifica se tem colchetes (é atribuição de array?)
-        // A regra é: ID ('[' expr ']')? '=' expr ';'
-        // Se tiver 2 expressões, a primeira é o índice e a segunda é o valor.
-        // Se tiver 1 expressão, é variável normal.
-
-        if (ctx.expr().size() > 1) {
-            // Caso Array: arr[indice] = valor;
-            Object indiceObj = visit(ctx.expr(0));
-            Object valorObj  = visit(ctx.expr(1));
+        // CASO 1: Variável Simples (x = 10)
+        if (ladoEsquerdo instanceof CParser.IdExprContext) {
+            String nome = ladoEsquerdo.getText();
+            escopoAtual.atribuir(nome, valorDireita);
+        }
+        // CASO 2: Vetor (v[0] = 10)
+        else if (ladoEsquerdo instanceof CParser.ArrayExprContext) {
+            CParser.ArrayExprContext arrCtx = (CParser.ArrayExprContext) ladoEsquerdo;
+            String nome = arrCtx.ID().getText();
+            int indice = (int) visit(arrCtx.expr());
 
             Variavel var = escopoAtual.buscar(nome);
-            if (var == null) throw new RuntimeException("Erro: Variável " + nome + " não existe.");
-
-            // Trata o array
             Object[] array = (Object[]) var.valor;
-            int idx = (int) indiceObj;
+            array[indice] = valorDireita;
+        }
+        // CASO 3: Struct/Union (p.x = 10)
+        else if (ladoEsquerdo instanceof CParser.MemberAccessExprContext) {
+            CParser.MemberAccessExprContext memCtx = (CParser.MemberAccessExprContext) ladoEsquerdo;
+            Object objeto = visit(memCtx.expr());
+            String campo = memCtx.ID().getText();
 
-            if (idx < 0 || idx >= array.length) {
-                throw new RuntimeException("Erro de Runtime: Índice " + idx + " fora dos limites do vetor " + nome);
+            if (objeto instanceof Map) {
+                ((Map<String, Object>) objeto).put(campo, valorDireita);
             }
-
-            array[idx] = valorObj;
-        } else {
-            // Caso Normal: x = valor;
-            Object valor = visit(ctx.expr(0));
-            escopoAtual.atribuir(nome, valor);
         }
-        return null;
+
+        return valorDireita;
     }
 
-    // --- 2. Expressões Matemáticas e Lógicas (10 pts) ---
-
+    // NOVO: Atribuição de ponteiro (*ptr = 20)
     @Override
-    public Object visitIntExpr(CParser.IntExprContext ctx) {
-        return Integer.parseInt(ctx.getText());
-    }
+    public Object visitPointerAssignExpr(CParser.PointerAssignExprContext ctx) {
+        Object endereco = visit(ctx.expr(0)); // Deve ser um nome de variável
+        Object valor = visit(ctx.expr(1));
 
-    @Override
-    public Object visitIdExpr(CParser.IdExprContext ctx) {
-        Variavel v = escopoAtual.buscar(ctx.getText());
-        if (v == null) throw new RuntimeException("Variavel " + ctx.getText() + " nao existe!");
-        return v.valor;
-    }
-
-    // Exemplo de Soma/Subtração
-    @Override
-    public Object visitAddSub(CParser.AddSubContext ctx) {
-        Object esq = visit(ctx.expr(0));
-        Object dir = visit(ctx.expr(1));
-
-        // Dica: Faça verificações aqui se é int ou float
-        if (ctx.op.getType() == CParser.PLUS) {
-            return (int)esq + (int)dir; // Simplificado para int
-        } else {
-            return (int)esq - (int)dir;
+        // Simplificação: tratamos como atribuição direta
+        if (endereco instanceof String) {
+            escopoAtual.atribuir((String) endereco, valor);
         }
+        return valor;
     }
 
-    // --- 3. Entrada e Saída (10 pts) ---
+    // --- 2. Estruturas de Controle ---
 
-    @Override
-    public Object visitPrintStmt(CParser.PrintStmtContext ctx) {
-        // 1. Pega o texto do printf (ex: "Valor: %d") e remove as aspas
-        String rawText = ctx.STRING().getText();
-        String format = rawText.substring(1, rawText.length() - 1);
-
-        // 2. Pega os argumentos (variáveis após a vírgula)
-        Object[] args = new Object[ctx.expr().size()];
-
-        for (int i = 0; i < ctx.expr().size(); i++) {
-            // Visita cada expressão para obter o valor real (ex: busca variável 'a')
-            args[i] = visit(ctx.expr(i));
-        }
-
-        // 3. Imprime formatado usando o próprio Java
-        // O try-catch evita que o programa quebre se o aluno errar os tipos no C
-        try {
-            System.out.printf(format, args);
-        } catch (Exception e) {
-            System.err.println("Erro de runtime no printf: " + e.getMessage());
-        }
-
-        return null;
-    }
-
-    private boolean isTrue(Object value) {
-        if (value instanceof Boolean) return (Boolean) value;
-        if (value instanceof Number) {
-            // Em C, 0 é falso, qualquer outro número é verdadeiro
-            return ((Number) value).doubleValue() != 0;
-        }
-        return false; // Por segurança
-    }
-
-    // Implementação do IF
     @Override
     public Object visitIfStmt(CParser.IfStmtContext ctx) {
-        // 1. Avalia a condição entre parênteses
         Object condicao = visit(ctx.expr());
 
-        // 2. Verifica se é verdadeira
         if (isTrue(condicao)) {
-            // Executa a primeira declaração (o bloco do IF)
             return visit(ctx.statement(0));
         } else {
-            // Se tiver ELSE (o segundo statement), executa ele
             if (ctx.statement().size() > 1) {
                 return visit(ctx.statement(1));
             }
@@ -171,56 +146,308 @@ public class CVisitorImpl extends CBaseVisitor<Object> {
 
     @Override
     public Object visitWhileStmt(CParser.WhileStmtContext ctx) {
-        // Enquanto a condição for verdadeira...
         while (isTrue(visit(ctx.expr()))) {
-            // ...executa o corpo do while
             visit(ctx.statement());
+
+            if (breakFlag) {
+                breakFlag = false;
+                break;
+            }
+            if (continueFlag) {
+                continueFlag = false;
+                continue;
+            }
+        }
+        return null;
+    }
+
+    // NOVO: Do-While
+    @Override
+    public Object visitDoWhileStmt(CParser.DoWhileStmtContext ctx) {
+        do {
+            visit(ctx.statement());
+
+            if (breakFlag) {
+                breakFlag = false;
+                break;
+            }
+            if (continueFlag) {
+                continueFlag = false;
+                // Não usar continue aqui, senão pula a verificação da condição
+            }
+        } while (isTrue(visit(ctx.expr())));
+        return null;
+    }
+
+    @Override
+    public Object visitForStmt(CParser.ForStmtContext ctx) {
+        // 1. Inicialização
+        if (ctx.declaration() != null) {
+            visit(ctx.declaration());
+        } else if (ctx.expr().size() > 0) {
+            // Primeira expressão é a inicialização
+            visit(ctx.expr(0));
+        }
+
+        // 2. Determina índices das expressões
+        int condIdx = (ctx.declaration() != null || ctx.expr().size() > 0) ?
+                (ctx.declaration() != null ? 0 : 1) : 0;
+        int incrIdx = condIdx + 1;
+
+        // 3. Loop
+        while (true) {
+            // Verifica condição
+            if (ctx.expr().size() > condIdx && ctx.expr(condIdx) != null) {
+                if (!isTrue(visit(ctx.expr(condIdx)))) break;
+            }
+
+            // Executa corpo
+            visit(ctx.statement());
+
+            if (breakFlag) {
+                breakFlag = false;
+                break;
+            }
+            if (continueFlag) {
+                continueFlag = false;
+                // Continue vai para o incremento
+            }
+
+            // Incremento
+            if (ctx.expr().size() > incrIdx && ctx.expr(incrIdx) != null) {
+                visit(ctx.expr(incrIdx));
+            }
+        }
+        return null;
+    }
+
+    // NOVO: Switch-Case
+    @Override
+    public Object visitSwitchStmt(CParser.SwitchStmtContext ctx) {
+        Object valorSwitch = visit(ctx.expr());
+        boolean matched = false;
+        boolean executeDefault = true;
+
+        for (CParser.SwitchCaseContext caseCtx : ctx.switchCase()) {
+            // CASE
+            if (caseCtx.INT() != null) {
+                int caseValue = Integer.parseInt(caseCtx.INT().getText());
+
+                if (!matched && valorSwitch.equals(caseValue)) {
+                    matched = true;
+                }
+
+                if (matched) {
+                    executeDefault = false;
+                    for (CParser.StatementContext stmt : caseCtx.statement()) {
+                        visit(stmt);
+                        if (breakFlag) {
+                            breakFlag = false;
+                            return null;
+                        }
+                    }
+                }
+            }
+            // DEFAULT
+            else {
+                if (!matched && executeDefault) {
+                    for (CParser.StatementContext stmt : caseCtx.statement()) {
+                        visit(stmt);
+                        if (breakFlag) {
+                            breakFlag = false;
+                            return null;
+                        }
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
+    // NOVO: Break
+    @Override
+    public Object visitBreakStmt(CParser.BreakStmtContext ctx) {
+        breakFlag = true;
+        return null;
+    }
+
+    // NOVO: Continue
+    @Override
+    public Object visitContinueStmt(CParser.ContinueStmtContext ctx) {
+        continueFlag = true;
+        return null;
+    }
+
+    // --- 3. Expressões Matemáticas ---
+
+    @Override
+    public Object visitIntExpr(CParser.IntExprContext ctx) {
+        return Integer.parseInt(ctx.getText());
+    }
+
+    @Override
+    public Object visitFloatExpr(CParser.FloatExprContext ctx) {
+        return Float.parseFloat(ctx.getText());
+    }
+
+    // NOVO: Char
+    @Override
+    public Object visitCharExpr(CParser.CharExprContext ctx) {
+        String text = ctx.getText();
+        // Remove as aspas simples: 'a' -> a
+        return text.charAt(1);
+    }
+
+    @Override
+    public Object visitStringExpr(CParser.StringExprContext ctx) {
+        String str = ctx.STRING().getText();
+        return str.substring(1, str.length() - 1);
+    }
+
+    @Override
+    public Object visitIdExpr(CParser.IdExprContext ctx) {
+        Variavel v = escopoAtual.buscar(ctx.getText());
+        if (v == null) throw new RuntimeException("Variavel " + ctx.getText() + " nao existe!");
+        return v.valor;
+    }
+
+    @Override
+    public Object visitAddSub(CParser.AddSubContext ctx) {
+        Object esq = visit(ctx.expr(0));
+        Object dir = visit(ctx.expr(1));
+
+        // Suporte a int e float
+        double valEsq = toDouble(esq);
+        double valDir = toDouble(dir);
+
+        if (ctx.op.getType() == CParser.PLUS) {
+            return valEsq + valDir;
+        } else {
+            return valEsq - valDir;
+        }
+    }
+
+    @Override
+    public Object visitMulDiv(CParser.MulDivContext ctx) {
+        Object esq = visit(ctx.expr(0));
+        Object dir = visit(ctx.expr(1));
+
+        double valEsq = toDouble(esq);
+        double valDir = toDouble(dir);
+
+        switch (ctx.op.getType()) {
+            case CParser.MULT: return valEsq * valDir;
+            case CParser.DIV:
+                if (valDir == 0) throw new RuntimeException("Erro: Divisão por zero!");
+                return valEsq / valDir;
+            case CParser.MOD: // NOVO: Módulo
+                return (int)valEsq % (int)valDir;
+            default: return 0;
+        }
+    }
+
+    @Override
+    public Object visitRelation(CParser.RelationContext ctx) {
+        Object esq = visit(ctx.expr(0));
+        Object dir = visit(ctx.expr(1));
+
+        double valEsq = toDouble(esq);
+        double valDir = toDouble(dir);
+
+        boolean resultado;
+        switch (ctx.op.getType()) {
+            case CParser.LT:  resultado = valEsq < valDir; break;
+            case CParser.GT:  resultado = valEsq > valDir; break;
+            case CParser.LTE: resultado = valEsq <= valDir; break;
+            case CParser.GTE: resultado = valEsq >= valDir; break;
+            case CParser.EQ:  resultado = valEsq == valDir; break;
+            case CParser.NEQ: resultado = valEsq != valDir; break;
+            default: resultado = false;
+        }
+
+        // Em C, false = 0, true = 1 (retorna int, não boolean)
+        return resultado ? 1 : 0;
+    }
+
+    // NOVO: Operadores Lógicos && e ||
+    @Override
+    public Object visitLogicalExpr(CParser.LogicalExprContext ctx) {
+        Object esqObj = visit(ctx.expr(0));
+        boolean esq = isTrue(esqObj);
+
+        if (ctx.op.getType() == CParser.AND) {
+            // Short-circuit: se esquerda é falsa, não avalia direita
+            if (!esq) return 0; // Retorna 0 (false em C)
+            Object dirObj = visit(ctx.expr(1));
+            boolean dir = isTrue(dirObj);
+            return dir ? 1 : 0; // Retorna 1 ou 0
+        } else { // OR
+            // Short-circuit: se esquerda é verdadeira, não avalia direita
+            if (esq) return 1; // Retorna 1 (true em C)
+            Object dirObj = visit(ctx.expr(1));
+            boolean dir = isTrue(dirObj);
+            return dir ? 1 : 0; // Retorna 1 ou 0
+        }
+    }
+
+    @Override
+    public Object visitUnaryExpr(CParser.UnaryExprContext ctx) {
+        String operador = ctx.op.getText();
+
+        if (operador.equals("-")) {
+            Object valor = visit(ctx.expr());
+            double val = toDouble(valor);
+            return -val;
+        }
+        else if (operador.equals("!")) {
+            boolean val = isTrue(visit(ctx.expr()));
+            return val ? 0 : 1;
+        }
+        else if (operador.equals("&")) {
+            // Retorna o nome da variável (endereço simulado)
+            if (ctx.expr() instanceof CParser.IdExprContext) {
+                return ((CParser.IdExprContext) ctx.expr()).getText();
+            }
+            return visit(ctx.expr());
+        }
+        else if (operador.equals("*")) {
+            // Desreferência: *ptr
+            Object endereco = visit(ctx.expr());
+            if (endereco instanceof String) {
+                Variavel v = escopoAtual.buscar((String) endereco);
+                if (v != null) return v.valor;
+            }
+            return endereco;
         }
         return null;
     }
 
     @Override
-    public Object visitRelation(CParser.RelationContext ctx) {
-        // 1. Pega os valores da esquerda e direita
-        // (Assumindo Inteiros por enquanto para simplificar)
-        int esq = (int)visit(ctx.expr(0));
-        int dir = (int)visit(ctx.expr(1));
-
-        // 2. Verifica qual é o operador e faz a conta
-        switch (ctx.op.getType()) {
-            case CParser.LT:  return esq < dir;  // Menor que (<)
-            case CParser.GT:  return esq > dir;  // Maior que (>)
-            case CParser.LTE: return esq <= dir; // Menor ou igual (<=)
-            case CParser.GTE: return esq >= dir; // Maior ou igual (>=)
-            case CParser.EQ:  return esq == dir; // Igual (==)
-            case CParser.NEQ: return esq != dir; // Diferente (!=)
-            default: return false;
-        }
+    public Object visitParenExpr(CParser.ParenExprContext ctx) {
+        return visit(ctx.expr());
     }
 
+    // --- 4. Entrada e Saída ---
+
     @Override
-    public Object visitFunction(CParser.FunctionContext ctx) {
-        String nomeFuncao = ctx.ID().getText();
+    public Object visitPrintStmt(CParser.PrintStmtContext ctx) {
+        String rawText = ctx.STRING().getText();
+        String format = rawText.substring(1, rawText.length() - 1);
 
-        // 1. Captura os nomes dos parâmetros
-        java.util.List<String> params = new java.util.ArrayList<>();
-        if (ctx.paramList() != null) {
-            for (CParser.ParamContext p : ctx.paramList().param()) {
-                params.add(p.ID().getText());
-            }
+        format = format.replace("\\n", "\n");
+        format = format.replace("\\t", "\t");
+
+        Object[] args = new Object[ctx.expr().size()];
+        for (int i = 0; i < ctx.expr().size(); i++) {
+            args[i] = visit(ctx.expr(i));
         }
 
-        // 2. Cria o objeto função e guarda na memória GLOBAL
-        // Nota: Funções em C são sempre globais
-        Funcao novaFuncao = new Funcao(nomeFuncao, ctx, params);
-
-        // Hack: Se for 'main', executa agora. Se não, só guarda.
-        if (nomeFuncao.equals("main")) {
-            return visitBlock(ctx.block());
-        } else {
-            // Assume que escopoAtual aqui é o Global
-            escopoAtual.declararFuncao(nomeFuncao, novaFuncao);
+        try {
+            System.out.printf(format, args);
+        } catch (Exception e) {
+            System.err.println("Erro de runtime no printf: " + e.getMessage());
         }
+
         return null;
     }
 
@@ -228,47 +455,55 @@ public class CVisitorImpl extends CBaseVisitor<Object> {
     public Object visitCallExpr(CParser.CallExprContext ctx) {
         String nomeFuncao = ctx.ID().getText();
 
-        // --- IMPLEMENTAÇÃO DO SCANF (NATIVO) ---
+        // SCANF
         if (nomeFuncao.equals("scanf")) {
-            // Exemplo: scanf("%d", &x);
-            // Arg 0: String de formatação "%d"
-            String formatStr = ctx.expr(0).getText().replace("\"", ""); // Remove aspas
-
-            // Arg 1: Variável com & (ex: &x). Precisamos do nome 'x'.
-            // O parser vê "&x" como uma UnaryExpr. Precisamos pegar o texto do filho.
-            // A estrutura na árvore será: UnaryExpr -> '&' e ID
-
-            // Cuidado: O aluno pode passar algo que não é &x. Vamos assumir que ele acertou por enquanto.
+            String formatStr = ctx.expr(0).getText().replace("\"", "");
             CParser.ExprContext arg1 = ctx.expr(1);
-            String nomeVariavel = arg1.getText().replace("&", ""); // Hack rápido para pegar o nome
+            String nomeVariavel = arg1.getText().replace("&", "");
 
-            Scanner sc = new Scanner(System.in);
             Object valorLido = null;
 
             if (formatStr.equals("%d")) {
-                // Lê um inteiro
-                System.out.print("Aguardando input (int): "); // Feedback visual opcional
-                valorLido = sc.nextInt();
+                System.out.print("Digite um inteiro: ");
+                valorLido = scanner.nextInt();
             } else if (formatStr.equals("%f")) {
-                System.out.print("Aguardando input (float): ");
-                valorLido = sc.nextDouble();
+                System.out.print("Digite um float: ");
+                valorLido = scanner.nextFloat();
+            } else if (formatStr.equals("%c")) {
+                System.out.print("Digite um char: ");
+                valorLido = scanner.next().charAt(0);
             } else if (formatStr.equals("%s")) {
-                System.out.print("Aguardando input (string): ");
-                valorLido = sc.next();
+                System.out.print("Digite uma string: ");
+                valorLido = scanner.next();
             }
 
-            // Atualiza na memória
             escopoAtual.atribuir(nomeVariavel, valorLido);
-            return 1; // scanf retorna o número de itens lidos
+            return 1;
         }
-        // 1. Busca a função na memória
+
+        // NOVO: GETS
+        if (nomeFuncao.equals("gets")) {
+            String nomeVar = ctx.expr(0).getText();
+            System.out.print("Digite uma linha: ");
+            scanner.nextLine(); // Limpa buffer
+            String linha = scanner.nextLine();
+            escopoAtual.atribuir(nomeVar, linha);
+            return linha;
+        }
+
+        // NOVO: PUTS
+        if (nomeFuncao.equals("puts")) {
+            Object valor = visit(ctx.expr(0));
+            System.out.println(valor);
+            return 0;
+        }
+
+        // CHAMADA DE FUNÇÃO NORMAL
         Funcao funcao = escopoAtual.buscarFuncao(nomeFuncao);
         if (funcao == null) {
             throw new RuntimeException("Erro: Função '" + nomeFuncao + "' não declarada.");
         }
 
-        // 2. Avalia os argumentos passados (ex: soma(10+5, 20))
-        // ctx.expr() contém a lista de argumentos passados
         java.util.List<Object> valoresArgs = new java.util.ArrayList<>();
         if (ctx.expr() != null) {
             for (CParser.ExprContext argExpr : ctx.expr()) {
@@ -276,133 +511,79 @@ public class CVisitorImpl extends CBaseVisitor<Object> {
             }
         }
 
-        // Validação básica de quantidade de argumentos
         if (valoresArgs.size() != funcao.parametros.size()) {
-            throw new RuntimeException("Erro: " + nomeFuncao + " espera " + funcao.parametros.size() + " argumentos, mas recebeu " + valoresArgs.size());
+            throw new RuntimeException("Erro: " + nomeFuncao + " espera " + funcao.parametros.size() + " argumentos.");
         }
 
-        // 3. PREPARAÇÃO DO NOVO ESCOPO (STACK FRAME)
-        // O pai do novo escopo deve ser o GLOBAL (para ver vars globais),
-        // e não o escopo de quem chamou (C tem escopo estático).
-        // Simplificação: Aqui usaremos escopoAtual como pai por enquanto,
-        // mas o ideal para nota máxima seria buscar o "Global" raiz.
         TabelaSimbolos escopoAntigo = this.escopoAtual;
-        TabelaSimbolos novoEscopo = new TabelaSimbolos(escopoAntigo); // Cria novo ambiente vazio
+        TabelaSimbolos novoEscopo = new TabelaSimbolos(escopoAntigo);
 
-        // 4. Declara os parâmetros no novo escopo com os valores passados
         for (int i = 0; i < funcao.parametros.size(); i++) {
             String nomeParam = funcao.parametros.get(i);
             Object valorArg = valoresArgs.get(i);
-            // Assume tipo 'int' genérico ou pega da definição da função se quiser ser estrito
-            novoEscopo.declarar(nomeParam, "int", valorArg);
+            novoEscopo.declarar(nomeParam, "int", valorArg, false);
         }
 
-        // 5. TROCA O ESCOPO E EXECUTA
         this.escopoAtual = novoEscopo;
         Object retorno = null;
         try {
-            // Executa o corpo da função guardada
             visit(funcao.ctx.block());
         } catch (ReturnException e) {
-            // Captura o valor do return (veremos isso abaixo)
             retorno = e.valor;
         } finally {
-            // 6. RESTAURA O ESCOPO ORIGINAL (Pop Stack)
             this.escopoAtual = escopoAntigo;
         }
 
         return retorno;
     }
+
+    // --- 5. Funções ---
+
+    @Override
+    public Object visitFunction(CParser.FunctionContext ctx) {
+        String nomeFuncao = ctx.ID().getText();
+        java.util.List<String> params = new java.util.ArrayList<>();
+
+        if (ctx.paramList() != null) {
+            for (CParser.ParamContext p : ctx.paramList().param()) {
+                params.add(p.ID().getText());
+            }
+        }
+
+        Funcao novaFuncao = new Funcao(nomeFuncao, ctx, params);
+
+        if (nomeFuncao.equals("main")) {
+            try {
+                return visitBlock(ctx.block());
+            } catch (ReturnException e) {
+                return e.valor;
+            }
+        } else {
+            escopoAtual.declararFuncao(nomeFuncao, novaFuncao);
+        }
+        return null;
+    }
+
     @Override
     public Object visitReturnStmt(CParser.ReturnStmtContext ctx) {
         Object resultado = null;
         if (ctx.expr() != null) {
             resultado = visit(ctx.expr());
         }
-        // Lança a exceção para "cortar" a execução até o catch do visitCallExpr
         throw new ReturnException(resultado);
     }
-    @Override
-    public Object visitUnaryExpr(CParser.UnaryExprContext ctx) {
-        String operador = ctx.op.getText();
-        Object valor = visit(ctx.expr()); // Visita o filho (ex: o '5' de '-5')
 
-        if (operador.equals("-")) {
-            // Inverte sinal (assumindo int ou float)
-            if (valor instanceof Integer) return -(int)valor;
-            if (valor instanceof Double) return -(double)valor;
-        }
-        else if (operador.equals("!")) {
-            // Negação lógica (0 vira 1, outros viram 0)
-            boolean val = isTrue(valor);
-            return val ? 0 : 1;
-        }
-        else if (operador.equals("&")) {
-            // Em um interpretador real, retornaríamos o endereço de memória.
-            // Como estamos simulando, podemos ignorar e retornar o próprio valor
-            // ou lidar com isso apenas no scanf (como fizemos acima com o .replace("&", "")).
-            // Para simplificar, vamos apenas retornar o valor da variável.
-            return valor;
-        }
-        return valor;
-    }
-    @Override
-    public Object visitExprStmt(CParser.ExprStmtContext ctx) {
-        // Apenas visita a expressão (ex: chama a função scanf ou soma)
-        // O valor de retorno é ignorado porque é um statement
-        visit(ctx.expr());
-        return null;
-    }
-
-    // Implementação de Multiplicação e Divisão
-    @Override
-    public Object visitMulDiv(CParser.MulDivContext ctx) {
-        Object esq = visit(ctx.expr(0));
-        Object dir = visit(ctx.expr(1));
-
-        // Simplificação: assumindo inteiros (pode expandir para float se quiser)
-        int valEsq = (int) esq;
-        int valDir = (int) dir;
-
-        if (ctx.op.getType() == CParser.MULT) {
-            return valEsq * valDir;
-        } else {
-            // Cuidado com divisão por zero em um interpretador real!
-            return valEsq / valDir;
-        }
-    }
-
-
-    @Override
-    public Object visitArrayExpr(CParser.ArrayExprContext ctx) {
-        String nome = ctx.ID().getText();
-        Object indiceObj = visit(ctx.expr());
-
-        Variavel var = escopoAtual.buscar(nome);
-        if (var == null) throw new RuntimeException("Vetor " + nome + " nao declarado.");
-
-        Object[] array = (Object[]) var.valor;
-        int idx = (int) indiceObj;
-
-        return array[idx];
-    }
+    // --- 6. Structs e Unions ---
 
     @Override
     public Object visitStructDecl(CParser.StructDeclContext ctx) {
-        // A lógica é a mesma que você já tinha, mas aplicada direto no contexto Decl
-
-        // Pega o nome (índice 0, pois é o primeiro ID da linha)
         String nomeStruct = ctx.ID(0).getText();
-
         StructDefinition def = new StructDefinition(nomeStruct);
 
-        // Itera pelos campos
-        // O índice dos IDs de campo começa em 1
         int indexIDCampo = 1;
         for(int i=0; i < ctx.type().size(); i++) {
             String tipoCampo = ctx.type(i).getText();
             String nomeCampo = ctx.ID(indexIDCampo).getText();
-
             def.campos.put(nomeCampo, tipoCampo);
             indexIDCampo++;
         }
@@ -410,53 +591,119 @@ public class CVisitorImpl extends CBaseVisitor<Object> {
         escopoAtual.definirStruct(nomeStruct, def);
         return null;
     }
+
     @Override
     public Object visitStructDefStmt(CParser.StructDefStmtContext ctx) {
         return visit(ctx.structDecl());
     }
 
+    // NOVO: Union
     @Override
-    public Object visitStructAssignStmt(CParser.StructAssignStmtContext ctx) {
-        // Regra: expr '.' ID '=' expr ';'
+    public Object visitUnionDecl(CParser.UnionDeclContext ctx) {
+        String nomeUnion = ctx.ID(0).getText();
+        UnionDefinition def = new UnionDefinition(nomeUnion);
 
-        Object objeto = visit(ctx.expr(0)); // O lado esquerdo (a struct)
-        String nomeCampo = ctx.ID().getText();
-        Object valor = visit(ctx.expr(1));  // O lado direito (o valor)
-
-        if (objeto instanceof Map) {
-            @SuppressWarnings("unchecked")
-            Map<String, Object> structInstancia = (Map<String, Object>) objeto;
-
-            if (!structInstancia.containsKey(nomeCampo)) {
-                throw new RuntimeException("Erro: Campo '" + nomeCampo + "' não existe.");
-            }
-
-            structInstancia.put(nomeCampo, valor);
-        } else {
-            throw new RuntimeException("Erro: Atribuição de campo em variável que não é struct.");
+        int indexIDCampo = 1;
+        for(int i=0; i < ctx.type().size(); i++) {
+            String tipoCampo = ctx.type(i).getText();
+            String nomeCampo = ctx.ID(indexIDCampo).getText();
+            def.campos.put(nomeCampo, tipoCampo);
+            indexIDCampo++;
         }
+
+        escopoAtual.definirUnion(nomeUnion, def);
         return null;
     }
 
     @Override
-    public Object visitMemberAccessExpr(CParser.MemberAccessExprContext ctx) {
-        // 1. Visita quem está à esquerda do ponto (o objeto 'p')
-        Object esquerda = visit(ctx.expr());
+    public Object visitUnionDefStmt(CParser.UnionDefStmtContext ctx) {
+        return visit(ctx.unionDecl());
+    }
 
-        // 2. Pega o nome do campo (o 'x')
+    @Override
+    public Object visitMemberAccessExpr(CParser.MemberAccessExprContext ctx) {
+        Object esquerda = visit(ctx.expr());
         String nomeCampo = ctx.ID().getText();
 
-        // 3. Verifica e acessa
         if (esquerda instanceof Map) {
             @SuppressWarnings("unchecked")
-            Map<String, Object> structInstancia = (Map<String, Object>) esquerda;
+            Map<String, Object> instancia = (Map<String, Object>) esquerda;
 
-            if (!structInstancia.containsKey(nomeCampo)) {
-                throw new RuntimeException("Erro: Campo '" + nomeCampo + "' nao existe na struct.");
+            if (!instancia.containsKey(nomeCampo)) {
+                throw new RuntimeException("Erro: Campo '" + nomeCampo + "' não existe.");
             }
-            return structInstancia.get(nomeCampo);
+            return instancia.get(nomeCampo);
         } else {
-            throw new RuntimeException("Erro: Tentando acessar campo '.' em algo que nao eh struct.");
+            throw new RuntimeException("Erro: Tentando acessar campo '.' em não-struct/union.");
         }
+    }
+
+    // --- 7. Arrays ---
+
+    @Override
+    public Object visitArrayExpr(CParser.ArrayExprContext ctx) {
+        String nome = ctx.ID().getText();
+        Object indiceObj = visit(ctx.expr());
+
+        Variavel var = escopoAtual.buscar(nome);
+        if (var == null) throw new RuntimeException("Vetor " + nome + " não declarado.");
+
+        Object[] array = (Object[]) var.valor;
+        int idx = (int) toDouble(indiceObj);
+
+        if (idx < 0 || idx >= array.length) {
+            throw new RuntimeException("Erro: Índice " + idx + " fora dos limites.");
+        }
+
+        return array[idx];
+    }
+
+    // --- 8. Pré-processador ---
+
+    // NOVO: #define
+    @Override
+    public Object visitDefine(CParser.DefineContext ctx) {
+        String nome = ctx.ID().getText();
+        Object valor;
+
+        if (ctx.INT() != null) {
+            valor = Integer.parseInt(ctx.INT().getText());
+        } else if (ctx.FLOAT() != null) {
+            valor = Float.parseFloat(ctx.FLOAT().getText());
+        } else {
+            String str = ctx.STRING().getText();
+            valor = str.substring(1, str.length() - 1);
+        }
+
+        escopoAtual.declarar(nome, "const", valor, false);
+        return null;
+    }
+
+    @Override
+    public Object visitExprStmt(CParser.ExprStmtContext ctx) {
+        visit(ctx.expr());
+        return null;
+    }
+
+    // --- Funções Auxiliares ---
+
+    private boolean isTrue(Object value) {
+        if (value == null) return false;
+        if (value instanceof Boolean) return (Boolean) value;
+        if (value instanceof Integer) return ((Integer) value) != 0;
+        if (value instanceof Double) return ((Double) value) != 0.0;
+        if (value instanceof Float) return ((Float) value) != 0.0f;
+        if (value instanceof Character) return ((Character) value) != '\0';
+        return false;
+    }
+
+    private double toDouble(Object value) {
+        if (value == null) return 0.0;
+        if (value instanceof Integer) return ((Integer) value).doubleValue();
+        if (value instanceof Float) return ((Float) value).doubleValue();
+        if (value instanceof Double) return (Double) value;
+        if (value instanceof Character) return (double)((Character) value);
+        if (value instanceof Boolean) return ((Boolean) value) ? 1.0 : 0.0;
+        return 0.0;
     }
 }

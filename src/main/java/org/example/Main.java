@@ -9,7 +9,12 @@ public class Main {
     public static void main(String[] args) throws Exception {
         // O código fonte será passado como argumento (requisito do trabalho) [cite: 39]
         // Ex de uso: java -jar seuprograma.jar codigo_fonte.c
-        String filename = "exemplo.c"; // Para teste no IDE
+        String filename;
+        if (args.length > 0) {
+            filename = args[0];
+        } else {
+            filename = "exemplo.c"; // Fallback para testes rápidos
+        }
 
         // 1. Cria o Lexer (Análise Léxica)
         CharStream input = CharStreams.fromFileName(filename);

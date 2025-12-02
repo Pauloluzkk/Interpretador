@@ -1,19 +1,24 @@
 grammar C;
 
-// Regra inicial: um programa é uma lista de includes, funções ou declarações globais
-prog: (include | function | structDecl | declaration)* ;
+// Regra inicial - ADICIONADO: define, unionDecl
+prog: (include | define | function | structDecl | unionDecl | declaration)* ;
 
 structDecl
     : 'struct' ID '{' (type ID ';')* '}' ';'
     ;
 
+// NOVO: Union
+unionDecl
+    : 'union' ID '{' (type ID ';')* '}' ';'
+    ;
+
 include: '#include' '<' ID '.h' '>' ;
 
-// Ex: int main(void) { ... } ou int soma(int a, int b) { ... }
-// AQUI estava o erro: agora paramList está definido abaixo
+// NOVO: #define
+define: '#define' ID (INT | FLOAT | STRING) ;
+
 function: type ID '(' (paramList | 'void')? ')' block ;
 
-// Definição dos parâmetros (NOVO)
 paramList
     : param (',' param)*
     ;
@@ -25,46 +30,63 @@ param
 block: '{' statement* '}' ;
 
 statement
-    : declaration ';'                       # DeclStmt
-    | structDecl                            # StructDefStmt
-    | ID ('[' expr ']')? '=' expr ';'       # AssignStmt
-    | expr '.' ID '=' expr ';'              # StructAssignStmt
-    | expr ';'                              # ExprStmt
-    | 'if' '(' expr ')' statement ('else' statement)? # IfStmt
-    | 'while' '(' expr ')' statement        # WhileStmt
-    | 'printf' '(' STRING (',' expr)* ')' ';' # PrintStmt
-    | 'return' expr? ';'                    # ReturnStmt
-    | block                                 # BlockStmt
+    : declaration ';'                                           # DeclStmt
+    | structDecl                                                # StructDefStmt
+    | unionDecl                                                 # UnionDefStmt
+    | expr ';'                                                  # ExprStmt
+    | 'if' '(' expr ')' statement ('else' statement)?           # IfStmt
+    | 'while' '(' expr ')' statement                            # WhileStmt
+    | 'for' '(' (declaration | expr)? ';' expr? ';' expr? ')' statement # ForStmt
+    | 'do' statement 'while' '(' expr ')' ';'                   # DoWhileStmt
+    | 'switch' '(' expr ')' '{' switchCase* '}'                 # SwitchStmt
+    | 'printf' '(' STRING (',' expr)* ')' ';'                   # PrintStmt
+    | 'return' expr? ';'                                        # ReturnStmt
+    | 'break' ';'                                               # BreakStmt
+    | 'continue' ';'                                            # ContinueStmt
+    | block                                                     # BlockStmt
     ;
 
-declaration:
- type ID ('[' INT ']' | '=' expr)? ;
+// NOVO: Switch cases
+switchCase
+    : 'case' INT ':' statement*
+    | 'default' ':' statement*
+    ;
 
-type: 'int' | 'float' | 'char' | 'void' | 'struct' ID ;
+// MODIFICADO: Suporte a ponteiros (int *ptr)
+declaration
+    : type ('*')? ID ('[' INT ']' | '=' expr)?
+    ;
 
-// Expressões básicas
+type: 'int' | 'float' | 'char' | 'void' | 'struct' ID | 'union' ID ;
+
+// MODIFICADO: Adicionado % (módulo) e && || (lógicos)
 expr
-    : expr '.' ID             # MemberAccessExpr
-    | ID '[' expr ']'             # ArrayExpr
-    | ID '(' (expr (',' expr)*)? ')' # CallExpr
-    | op=('&'|'-'|'!') expr       # UnaryExpr
-    | expr op=('*'|'/') expr      # MulDiv
-    | expr op=('+'|'-') expr      # AddSub
-    | expr op=('=='|'!='|'<'|'>'|'<='|'>=') expr # Relation
-    | ID                       # IdExpr
-    | INT                      # IntExpr
-    | FLOAT                    # FloatExpr
-    | STRING                   # StringExpr
-    | '(' expr ')'             # ParenExpr
+    : expr op=('&&'|'||')                     expr              # LogicalExpr
+    | expr op=('=='|'!='|'<'|'>'|'<='|'>=')   expr              # Relation
+    | expr op=('+'|'-')                       expr              # AddSub
+    | expr op=('*'|'/'|'%')                   expr              # MulDiv
+    | <assoc=right> expr '=' expr                               # AssignExpr
+    | <assoc=right> '*' expr '=' expr                           # PointerAssignExpr
+    | expr '.' ID                                               # MemberAccessExpr
+    | ID '[' expr ']'                                           # ArrayExpr
+    | ID '(' (expr (',' expr)*)? ')'                            # CallExpr
+    | op=('&'|'-'|'!'|'*') expr                                 # UnaryExpr
+    | ID                                                        # IdExpr
+    | INT                                                       # IntExpr
+    | FLOAT                                                     # FloatExpr
+    | CHAR                                                      # CharExpr
+    | STRING                                                    # StringExpr
+    | '(' expr ')'                                              # ParenExpr
     ;
 
-// --- LÉXICO (Tokens Nomeados) ---
+// --- LÉXICO ---
 
-// Operadores Matemáticos (Isso resolve o erro CParser.PLUS)
+// Operadores Matemáticos
 PLUS : '+' ;
 MINUS : '-' ;
 MULT : '*' ;
 DIV : '/' ;
+MOD : '%' ;           // NOVO
 ADDR : '&' ;
 NOT  : '!' ;
 
@@ -76,6 +98,10 @@ LT : '<' ;
 GTE : '>=' ;
 LTE : '<=' ;
 
+// Operadores Lógicos - NOVO
+AND : '&&' ;
+OR : '||' ;
+
 // Outros Símbolos
 ASSIGN : '=' ;
 SEMI : ';' ;
@@ -84,25 +110,42 @@ LPAREN : '(' ;
 RPAREN : ')' ;
 LBRACE : '{' ;
 RBRACE : '}' ;
+DOT : '.' ;
+LBRACK : '[' ;
+RBRACK : ']' ;
+COLON : ':' ;         // NOVO (para switch)
 
 // Tipos de Dados
 TYPE_INT : 'int' ;
 TYPE_FLOAT : 'float' ;
+TYPE_CHAR : 'char' ;  // NOVO
 TYPE_VOID : 'void' ;
+TYPE_STRUCT : 'struct' ;
+TYPE_UNION : 'union' ; // NOVO
 
 // Palavras Chave
 IF : 'if' ;
 ELSE : 'else' ;
 WHILE : 'while' ;
+FOR : 'for' ;
+DO : 'do' ;            // NOVO
+SWITCH : 'switch' ;    // NOVO
+CASE : 'case' ;        // NOVO
+DEFAULT : 'default' ;  // NOVO
+BREAK : 'break' ;      // NOVO
+CONTINUE : 'continue' ; // NOVO
 RETURN : 'return' ;
 PRINT : 'printf' ;
+DEFINE : '#define' ;   // NOVO
 
+// Comentários
 LINE_COMMENT : '//' ~[\r\n]* -> skip ;
 BLOCK_COMMENT : '/*' .*? '*/' -> skip ;
 
-// Identificadores e Literais (Mantenha no final, pois a ordem importa!)
+// Identificadores e Literais
 ID: [a-zA-Z_] [a-zA-Z_0-9]* ;
 INT: [0-9]+ ;
 FLOAT: [0-9]+ '.' [0-9]+ ;
+CHAR: '\'' . '\'' ;    // NOVO: 'a', 'b', etc
 STRING: '"' .*? '"' ;
 WS: [ \t\r\n]+ -> skip ;
