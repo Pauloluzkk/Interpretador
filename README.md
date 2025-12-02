@@ -259,20 +259,28 @@ Exceção customizada para implementar `return`:
 
 ### Testes Implementados
 
-| ID | Funcionalidade | Arquivo | Status |
-|----|----------------|---------|--------|
-| 01 | Declarações | `test01_declaracoes.c` | ✅      |
-| 03 | While | `test03_while.c` | ✅      |
-| 04 | For | `test04_for.c` | ✅      |
-| 05 | Do-While | `test05_do_while.c` | ✅      |
-| 06 | Switch | `test06_switch.c` | ✅      |
-| 08 | Operadores | `test08_aritmeticos.c` | ✅      |
-| 10 | Lógicos | `test10_logicos.c` | ⚠️     |
-| 12 | Recursão | `test12_recursao_direta.c` | ✅      |
-| 14 | Structs | `test14_struct.c` | ✅      |
-| 15 | Unions | `test15_union.c` | ✅      |
-| 28 | Primos | `test28_primos.c` | ✅      |
+| ID | Funcionalidade | Arquivo             | Status |
+|----|----------------|---------------------|--------|
+| 01 | Declarações | `test1.c`           | ✅      |
+| 03 | While | `test3_while.c`     | ✅      |
+| 04 | For | `test4_for.c`       | ✅      |
+| 05 | Do-While | `test5_dowhile.c`   | ✅      |
+| 06 | Switch | `test6_switchcase.c` | ✅      |
+| 08 | Operadores | `test8_operadores.c` | ✅      |
+| 10 | Lógicos | `test10_opLogicos.c` | ⚠️     |
+| 12 | Recursão | `test12_recursao.c` | ✅      |
+| 14 | Structs | `test14_struct.c`   | ✅      |
+| 15 | Unions | `test15_union.c`    | ✅      |
+| 28 | Primos | `test28_primos.c`   | ✅      |
 
 **Total:** 28 testes.
+
+# 🐛 Limitações Conhecidas
+
+1. **Tipos:** Não implementa `long`, `double`, `unsigned`
+2. **Ponteiros:** Implementação básica (não suporta aritmética de ponteiros)
+3. **Strings:** Tratadas como arrays de char simples
+4. **Pré-processador:** Apenas `#include` e `#define` básicos
+5. **Biblioteca padrão:** Apenas `printf`, `scanf`, `gets`, `puts`
 
 **Desenvolvido com ☕ e 💻**
